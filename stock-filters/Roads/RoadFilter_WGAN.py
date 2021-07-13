@@ -3,6 +3,8 @@ import numpy as np
 from PIL import Image
 import cv2.cv2 as cv2
 
+import utilityFunctions as uf
+
 class Roads:
 
     # A static variable that defines the path for the model
@@ -83,7 +85,99 @@ gets called after executing the filter in MCEdit
 def perform(level, box, options):
     road_network = Roads().process_road_network(box)  # Get the road as a Numpy array Image
     biom, road_blocks, log_types = get_biom(level, box)  # Get the biom and types of blocks
+    floor = get_floor(level, box, road_network)
+    build_road(level, floor, road_network)
 
+def build_road(level, floor_points, road):
+    for pos in floor_points:
+        x, y, z = floor_points[pos]
+
+        # # TODO: check the elevetation level and record the road position
+        if pos in tuple(zip(*np.where(road == 255))):
+            # Build the road here
+            uf.setBlock(level, (49, 0), x, y, z)
+            # Remove trees if on road
+            remove_tree(level, x, y, z)
+
+def remove_tree(level, x, y, z):
+    points_x, points_y, points_z = [], [y], []
+    y += 1
+
+    while True:
+        if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+            points_y.append(y)
+            points_x = get_x_bound(level, x, y, z, points_x)
+            points_z = get_z_bound(level, x, y, z, points_z)
+            y += 1
+        else: break
+    remove_tree_from_bound(level, points_x, points_y, points_z)
+
+def remove_tree_from_bound(level, points_x, points_y, points_z):
+    if points_x and points_y and points_z:
+        minx, maxx = min(points_x), max(points_x)
+        miny, maxy = min(points_y), max(points_y)
+        minz, maxz = min(points_z), max(points_z)
+
+        for x in range(minx-1, maxx+1):
+            for z in range(minz-1, maxz+1):
+                for y in range(miny-1, maxy+1):
+                    if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: uf.setBlock(level, (0, 0), x, y, z)
+
+def get_x_bound(level, x, y, z, points_x):
+    posx =  x + 1
+    reverse = False
+    while True:
+        if reverse is False:
+            if level.blockAt(posx, y, z) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+                points_x.append(posx)
+                posx += 1
+            else:
+                posx = x-1
+                reverse = True
+        else:
+            if level.blockAt(posx, y, z) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+                points_x.append(posx)
+                posx -= 1
+            else: break
+    # print("X: ", points_x)
+    return points_x
+
+def get_z_bound(level, x, y, z, points_z):
+    posz = z + 1
+    reverse = False
+    while True:
+        if reverse is False:
+            if level.blockAt(x, y, posz) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+                points_z.append(posz)
+                posz += 1
+            else:
+                posz = z-1
+                reverse = True
+        else:
+            if level.blockAt(x, y, posz) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+                points_z.append(posz)
+                posz -= 1
+            else: break
+    # print("Z: ", points_z)
+    return points_z
+
+def get_floor(level, box, road_network):
+    mapped_points = {}
+    pos_x, pos_y = 0, 0
+    for x in range(box.minx, box.maxx): # depth
+        for z in range(box.minz, box.maxz): # width
+            for y in range(box.maxy, box.miny-1, -1): # height (col) but count the selected level
+                #
+                # if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
+                #     uf.setBlock(level, (0, 0), x, y, z)
+                if level.blockAt(x, y, z) in [1, 2, 3, 12, 13] and (pos_x, pos_y) not in mapped_points.keys():
+                    mapped_points[(pos_x, pos_y)] = (x, y, z)
+                    break
+            pos_y += 1
+        pos_y = 0
+        pos_x += 1
+
+    return mapped_points
 
 def get_biom(level, box):
     log_types, road_choices = [], []
@@ -105,7 +199,7 @@ def get_biom(level, box):
 def get_road_blocks(road_biom):
     # Block, Slab, Stairs
     if road_biom in [2, 7, 16, 17, 27, 28, 36, 37, 38, 39, 130, 165, 166, 167]: return [43, 44, 109]
-    else: return [1, 44.5, 67]
+    else: return [1, 44, 67]
 
 # TODO: link/cite
 # Method from the GDMC Competition
