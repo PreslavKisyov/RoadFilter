@@ -2,8 +2,9 @@ import keras
 import numpy as np
 from PIL import Image
 import cv2.cv2 as cv2
-
+import A_star as star
 import utilityFunctions as uf
+from itertools import combinations
 
 class Roads:
 
@@ -38,7 +39,7 @@ class Roads:
             # If there are no more valid road maps (above the pct)
             if image_index > self.n_imgs:
                 index_list = np.random.random_integers(self.n_imgs, size=self.n_maps - len(road_maps))
-                for i in index_list: road_maps.append(imgs[i, :, :, 0])
+                for i in index_list: road_maps.append(imgs[idw, :, :, 0])
                 break
 
             # Get the percentage of roads present
@@ -85,19 +86,80 @@ gets called after executing the filter in MCEdit
 def perform(level, box, options):
     road_network = Roads().process_road_network(box)  # Get the road as a Numpy array Image
     biom, road_blocks, log_types = get_biom(level, box)  # Get the biom and types of blocks
-    floor = get_floor(level, box, road_network)
-    build_road(level, floor, road_network)
+    floor, usable_floor = get_floor(level, box)
+    build_road(level, floor, road_network, box, usable_floor)
 
-def build_road(level, floor_points, road):
-    for pos in floor_points:
+
+def build_road(level, floor_points, road, box, usable_floor):
+    # road_size = np.array(np.where(road == 255)).shape[-1]
+
+    for pos in sorted(floor_points):
         x, y, z = floor_points[pos]
 
-        # # TODO: check the elevetation level and record the road position
-        if pos in tuple(zip(*np.where(road == 255))):
-            # Build the road here
-            uf.setBlock(level, (49, 0), x, y, z)
-            # Remove trees if on road
+        # Remove Lava
+        remove_lava(level, x, y, z, box)
+        # TODO: check the elevation level and record the road position and find obstacles
+
+        # if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [8, 9]:
+        #     pct += 1
+
+        if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [8, 9]:
+            # TODO: Build the road here
+            uf.setBlock(level, (81, 0), x, y, z)
+            # Remove trees if on roada
             remove_tree(level, x, y, z)
+            usable_floor[pos[0]][pos[1]] = 255
+
+    # Get Components
+    components, usable_floor = get_components(level, usable_floor, floor_points)
+    # Check if there are separated components
+    if components is not None:
+        print(len(components))
+        print(components)
+        print(usable_floor)
+        connect_components(level, components, usable_floor)
+
+def connect_components(level, components, usable_floor):
+    start_end_points = list(combinations(components.keys(), 2))
+    print(start_end_points)
+    for points in start_end_points:
+        print(star.search(usable_floor, 1, components[points[0]], components[points[1]]))
+        # Get where it is not -1 and set the the middle points to some block
+def get_components(level, usable_floor, floor_points):
+    ar_floor = np.array(usable_floor, dtype=np.uint8)
+    components, objects, stats, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
+
+    if components < 3: return None, None # The background + 2 separated roads
+    comp = np.arange(1, components) # all components except the background
+    components_map = {}
+    for x in range(0, ar_floor.shape[0]):
+        for y in range(0, ar_floor.shape[1]):
+            posx, posy, posz = floor_points[(x, y)]
+            if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1  # Add water
+            else: ar_floor[x][y] = 0  # Remove path
+            if objects[x][y] in comp:
+                components_map[objects[x][y]] = [x, y]
+                comp = np.delete(comp, np.argwhere(comp == objects[x][y]))
+    return components_map, ar_floor
+
+# This method removes any detected lava
+def remove_lava(level, x, y, z, box):
+    block = level.blockAt(x, y, z)
+    c_x, c_y = 0, 0
+    # Get the closest non-obstacle block
+    while block in [8, 9, 10, 11]:
+        if x+c_x != box.maxx:
+            block = level.blockAt(x+c_x, y, z)
+            c_x += 1
+        else:
+            block = level.blockAt(x, y+c_y, z)
+            c_y += 1
+
+        if y+c_y == box.maxy: block = 0
+
+    # If there is lava
+    if level.blockAt(x, y, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y, z)
+    elif level.blockAt(x, y+1, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y+1, z)
 
 def remove_tree(level, x, y, z):
     points_x, points_y, points_z = [], [y], []
@@ -161,23 +223,27 @@ def get_z_bound(level, x, y, z, points_z):
     # print("Z: ", points_z)
     return points_z
 
-def get_floor(level, box, road_network):
+def get_floor(level, box):
     mapped_points = {}
+    usable_floor = []
     pos_x, pos_y = 0, 0
     for x in range(box.minx, box.maxx): # depth
+        col = []
         for z in range(box.minz, box.maxz): # width
-            for y in range(box.maxy, box.miny-1, -1): # height (col) but count the selected level
-                #
-                # if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
-                #     uf.setBlock(level, (0, 0), x, y, z)
-                if level.blockAt(x, y, z) in [1, 2, 3, 12, 13] and (pos_x, pos_y) not in mapped_points.keys():
+            for y in range(box.maxy, box.miny-1, -1): # height (col) but count the selected level # in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80]
+                if level.blockAt(x, y, z) in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80] and (pos_x, pos_y) not in mapped_points.keys():
                     mapped_points[(pos_x, pos_y)] = (x, y, z)
+
+                    # block = 1 if level.blockAt(x, y, z) in [8, 9] else 0
+                    block = 0
+                    col.append(block)
                     break
             pos_y += 1
+        usable_floor.append(col)
         pos_y = 0
         pos_x += 1
 
-    return mapped_points
+    return mapped_points, usable_floor
 
 def get_biom(level, box):
     log_types, road_choices = [], []
