@@ -98,7 +98,7 @@ def build_road(level, floor_points, road, box, usable_floor):
 
         # Remove Lava
         remove_lava(level, x, y, z, box)
-        # TODO: check the elevation level and record the road position and find obstacles
+        # TODO: check the elevation level and find obstacles
 
         # if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [8, 9]:
         #     pct += 1
@@ -106,7 +106,7 @@ def build_road(level, floor_points, road, box, usable_floor):
         if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [8, 9]:
             # TODO: Build the road here
             uf.setBlock(level, (81, 0), x, y, z)
-            # Remove trees if on roada
+            # Remove trees if on road
             remove_tree(level, x, y, z)
             usable_floor[pos[0]][pos[1]] = 255
 
@@ -114,17 +114,42 @@ def build_road(level, floor_points, road, box, usable_floor):
     components, usable_floor = get_components(level, usable_floor, floor_points)
     # Check if there are separated components
     if components is not None:
-        print(len(components))
-        print(components)
-        print(usable_floor)
-        connect_components(level, components, usable_floor)
+        connect_components(level, components, usable_floor, floor_points)
 
-def connect_components(level, components, usable_floor):
+def connect_components(level, components, usable_floor, floor_points):
     start_end_points = list(combinations(components.keys(), 2))
     print(start_end_points)
     for points in start_end_points:
-        print(star.search(usable_floor, 1, components[points[0]], components[points[1]]))
-        # Get where it is not -1 and set the the middle points to some block
+        path = star.search(usable_floor, 1, components[points[0]], components[points[1]])
+        ar_path = np.array(path)
+        # Roads are connectable
+        if path is None:
+            # Remove any constraints (water is put is walkable)
+            water_path = np.array(star.search(np.zeros(usable_floor.shape), 1, components[points[0]], components[points[1]]))
+            rows, cols = np.where(water_path != -1)
+            build_bridge(level, rows, cols, floor_points)
+            print(water_path, " None")
+        else:
+            print(ar_path, " Not None")
+            rows, cols = np.where(ar_path != -1)
+            # Connect the roads
+            connect_roads(rows, cols, level, floor_points)
+
+def build_bridge(level, rows, cols, floor_points):
+    for r in rows[1:-1]:
+        for c in cols[1:-1]:
+            x, y, z = floor_points[(r, c)]
+            # TODO: Build bridge
+            if level.blockAt(x, y, z) in [8, 9]: uf.setBlock(level, (161, 0), x, y+1, z)
+            else: uf.setBlock(level, (161, 0), x, y, z)
+
+def connect_roads(rows, cols, level, floor_points):
+    for r in rows[1:-1]:
+        for c in cols[1:-1]:
+            x, y, z = floor_points[(r, c)]
+            # TODO: Build road
+            uf.setBlock(level, (18, 0), x, y, z)
+
 def get_components(level, usable_floor, floor_points):
     ar_floor = np.array(usable_floor, dtype=np.uint8)
     components, objects, stats, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
@@ -135,9 +160,9 @@ def get_components(level, usable_floor, floor_points):
     for x in range(0, ar_floor.shape[0]):
         for y in range(0, ar_floor.shape[1]):
             posx, posy, posz = floor_points[(x, y)]
-            if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1  # Add water
-            else: ar_floor[x][y] = 0  # Remove path
-            if objects[x][y] in comp:
+            if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1  # Add water to map
+            else: ar_floor[x][y] = 0  # Remove path from map
+            if objects[x][y] in comp:  # Record the positions of each component
                 components_map[objects[x][y]] = [x, y]
                 comp = np.delete(comp, np.argwhere(comp == objects[x][y]))
     return components_map, ar_floor
@@ -233,8 +258,11 @@ def get_floor(level, box):
             for y in range(box.maxy, box.miny-1, -1): # height (col) but count the selected level # in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80]
                 if level.blockAt(x, y, z) in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80] and (pos_x, pos_y) not in mapped_points.keys():
                     mapped_points[(pos_x, pos_y)] = (x, y, z)
-
-                    # block = 1 if level.blockAt(x, y, z) in [8, 9] else 0
+                    block = 0
+                    col.append(block)
+                    break
+                elif level.blockAt(x, y-1, z) in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80] and (pos_x, pos_y) not in mapped_points.keys():
+                    mapped_points[(pos_x, pos_y)] = (x, y-1, z)
                     block = 0
                     col.append(block)
                     break
