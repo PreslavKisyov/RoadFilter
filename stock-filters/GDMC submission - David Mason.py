@@ -13,6 +13,7 @@ from numpy import *
 from pymclevel import alphaMaterials, MCSchematic, MCLevel, BoundingBox
 from mcplatform import *
 import utilityFunctions as uf
+import RoadFilter_WGAN as rf
 
 
 #def get__bottom(level,min_y):
@@ -2163,10 +2164,10 @@ def get_usable_site(level, seeds, bottom):
             
 
 def perform(level, box, options):
-    print "This is the level: " + str(level)
-    print "This is the box: " + str(box)
+    # print "This is the level: " + str(level)
+    # print "This is the box: " + str(box)
     bottom = get_bottom(level, box, 1)
-    
+    # print("BOTTOM: "+ str(bottom))
     log_types = []
     stair_types = []
     slab_types = []
@@ -2252,120 +2253,86 @@ def perform(level, box, options):
 
     print("drawing major paths")
     
-    for seed in district_seeds:
-       # uf.setBlock(level,(22,0), seed.x, 30, seed.z)
-#        for point in seed.closest_points:
-#            uf.setBlock(level,seed.block, point[0], point[2], point[1])
-        for point in seed.edge_points:
-            print "Point: "+str(point)
-            print "Seed: "+str(seed)
-            #uf.setBlock(level,seed.block, point[0], point[2], point[1])
-            
-#            if randint(0,15) == 1:
-#                
-#                dists = []
-#                
-#                for post in lamp_post_points:
-#                    d = sqrt(((post[0]-point[0])**2) + ((post[1]-point[1])**2))
-#                    dists.append(d)
-#                    
-#                if dists != []:
-#                    min_d = min(dists)
-#                else:
-#                    min_d = 11
-#                    
-#                if min_d > 10:
-#                    
-#                    x_off = randint(-1,1)
-#                    z_off = randint(-1,1)
-#                    
-#                    lamp_post_points.append((point[0]+x_off, point[1]+z_off))
-#                    
-#                    uf.setBlock(level,(98,0), point[0]+x_off, point[2]+1, point[1]+z_off)
-#                    uf.setBlock(level,(139,0), point[0]+x_off, point[2]+2, point[1]+z_off)
-#                    uf.setBlock(level,(98,0), point[0]+x_off, point[2]+3, point[1]+z_off)
-#                    uf.setBlock(level,(89,0), point[0]+x_off, point[2]+4, point[1]+z_off)
-#                    uf.setBlock(level,(44,5), point[0]+x_off, point[2]+5, point[1]+z_off)
-#                    
-#                    uf.setBlockIfEmpty(level,(96,15), point[0]+1+x_off, point[2]+4, point[1]+z_off)
-#                    uf.setBlockIfEmpty(level,(96,14), point[0]-1+x_off, point[2]+4, point[1]+z_off)
-#                    uf.setBlockIfEmpty(level,(96,13), point[0]+x_off, point[2]+4, point[1]+1+z_off)
-#                    uf.setBlockIfEmpty(level,(96,12), point[0]+x_off, point[2]+4, point[1]-1+z_off)
-            
-            for x in range(-1,2):
-                for z in range(-1,2):
-                        #uf.setBlockToGround(level, (0,0), point[0], point[1], point[2]+2, point[2])
-                        for k in range(2):
-                            uf.setBlock(level,(0,0), point[0]+x, point[2]+k+1, point[1]+z)
-                    #if randint(0,2*(abs(x)+abs(z))) == 0:
-                        block = choice([(98,0),(98,0),(98,0),(98,0),(1,5),(4,0),(13,0),(98,1),(98,2)])
-                        
-                        if level.blockAt(point[0]+x, point[2], point[1]+z) == 9:
-                            uf.setBlockIfEmpty(level,(44,5), point[0]+x, point[2]+1, point[1]+z)
-                        else:
-                            uf.setBlock(level,block, point[0]+x, point[2], point[1]+z)
-
+    # for seed in district_seeds:
+    #
+    #     for point in seed.edge_points:
+    #         print "Point: "+str(point)
+    #         print "Seed: "+str(seed)
+    #
+    #         for x in range(-1,2):
+    #             for z in range(-1,2):
+    #                     #uf.setBlockToGround(level, (0,0), point[0], point[1], point[2]+2, point[2])
+    #                     for k in range(2):
+    #                         uf.setBlock(level,(0,0), point[0]+x, point[2]+k+1, point[1]+z)
+    #                 #if randint(0,2*(abs(x)+abs(z))) == 0:
+    #                     block = choice([(98,0),(98,0),(98,0),(98,0),(1,5),(4,0),(13,0),(98,1),(98,2)])
+    #
+    #                     if level.blockAt(point[0]+x, point[2], point[1]+z) == 9:
+    #                         uf.setBlockIfEmpty(level,(44,5), point[0]+x, point[2]+1, point[1]+z)
+    #                     else:
+    #                         uf.setBlock(level,block, point[0]+x, point[2], point[1]+z)
+    rf.perform(level, box, options)
 
 
     
  ##############################################################
- 
-    print("digging hole")
- 
-    mine = make_mine(district_seeds)
-    
-    for point in mine.seed.closest_points:
-        for k in range(40):
-            uf.setBlock(level,(0,0), point[0], point[2]+k, point[1])
-
-    for point in mine.dirt_space:
-        dirt_type = choice([(3,0),(3,1)])
-        uf.setBlock(level,(3,0), point[0], point[2], point[1])
-        
-    for tunnel in mine.tunnels:
-        for point in tunnel.floor:
-            block = choice([(3,0),(3,1),(1,0),(1,5),(1,1),(3,2),(13,0)])
-            uf.setBlock(level,block, point[0], point[2], point[1])
-    
-    for point in mine.hole:
-        uf.setBlock(level,(0,0), point[0], point[2], point[1])
-    
-    
-    for tunnel in mine.tunnels:
-        for point in tunnel.branch:
-            uf.setBlock(level,(0,0), point[0], point[2], point[1])
-        
-    for tunnel in mine.tunnels:
-        for point in tunnel.pillars:
-            uf.setBlock(level,(162,1), point[0], point[2], point[1])
-            
-        for point in tunnel.torch_points:
-            uf.setBlock(level,(50,1), point[0]+1, point[2], point[1])
-            uf.setBlock(level,(50,2), point[0]-1, point[2], point[1])
-            uf.setBlock(level,(50,3), point[0], point[2], point[1]+1)
-            uf.setBlock(level,(50,4), point[0], point[2], point[1]-1)
-    
-    for point in mine.path:
-        uf.setBlock(level,(0,0), point[0], point[2], point[1])
-        
-    torches = []
-        
-    for point in mine.path_floor:
-        
-        if randint(1,10) == 1 and level.blockAt(point[0], point[2]-1, point[1]) != 0:
-            dists = []
-            for torch in torches:
-                d = sqrt(((torch[0]-point[0])**2)+((torch[1]-point[1])**2)+((torch[2]-point[2])**2))
-                dists.append(d)
-                
-            if dists == []:
-                min_d = 20
-            else:
-                min_d = min(dists)
-                
-            if min_d > 5:
-               uf.setBlock(level,(50,5), point[0], point[2], point[1])
-               torches.append((point[0], point[1],point[2]))
+    #
+    # print("digging hole")
+    #
+    # mine = make_mine(district_seeds)
+    #
+    # for point in mine.seed.closest_points:
+    #     for k in range(40):
+    #         uf.setBlock(level,(0,0), point[0], point[2]+k, point[1])
+    #
+    # for point in mine.dirt_space:
+    #     dirt_type = choice([(3,0),(3,1)])
+    #     uf.setBlock(level,(3,0), point[0], point[2], point[1])
+    #
+    # for tunnel in mine.tunnels:
+    #     for point in tunnel.floor:
+    #         block = choice([(3,0),(3,1),(1,0),(1,5),(1,1),(3,2),(13,0)])
+    #         uf.setBlock(level,block, point[0], point[2], point[1])
+    #
+    # for point in mine.hole:
+    #     uf.setBlock(level,(0,0), point[0], point[2], point[1])
+    #
+    #
+    # for tunnel in mine.tunnels:
+    #     for point in tunnel.branch:
+    #         uf.setBlock(level,(0,0), point[0], point[2], point[1])
+    #
+    # for tunnel in mine.tunnels:
+    #     for point in tunnel.pillars:
+    #         uf.setBlock(level,(162,1), point[0], point[2], point[1])
+    #
+    #     for point in tunnel.torch_points:
+    #         uf.setBlock(level,(50,1), point[0]+1, point[2], point[1])
+    #         uf.setBlock(level,(50,2), point[0]-1, point[2], point[1])
+    #         uf.setBlock(level,(50,3), point[0], point[2], point[1]+1)
+    #         uf.setBlock(level,(50,4), point[0], point[2], point[1]-1)
+    #
+    # for point in mine.path:
+    #     uf.setBlock(level,(0,0), point[0], point[2], point[1])
+    #
+    # torches = []
+    #
+    # for point in mine.path_floor:
+    #
+    #     if randint(1,10) == 1 and level.blockAt(point[0], point[2]-1, point[1]) != 0:
+    #         dists = []
+    #         for torch in torches:
+    #             d = sqrt(((torch[0]-point[0])**2)+((torch[1]-point[1])**2)+((torch[2]-point[2])**2))
+    #             dists.append(d)
+    #
+    #         if dists == []:
+    #             min_d = 20
+    #         else:
+    #             min_d = min(dists)
+    #
+    #         if min_d > 5:
+    #            uf.setBlock(level,(50,5), point[0], point[2], point[1])
+    #            torches.append((point[0], point[1],point[2]))
 
 
                 
