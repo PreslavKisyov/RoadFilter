@@ -18,15 +18,25 @@ class Roads:
     # A static variable that defines the path for the model
     path = "stock-filters/Roads/RoadWGAN.h5"
 
+    # This is the main method of the class
+    # It initializes vital variables
+    # @param n_maps The number of roads to combine
+    # @param n_imgs The number of images generated
     def __init__(self, n_maps=2, n_imgs=25):
         self.latent_dim = 100
         self.n_imgs = n_imgs
         self.n_maps = n_maps
+        self.usable_floor = None
+        self.floor = None
+        self.blocks = None
 
         # Execute functions
         imgs = self.load_model()
         self.road_network = self.get_road_network(imgs)
 
+    # This method loads a keras model from path
+    # and produces noise to be passed through the model
+    # @return The predicted WGAN images
     def load_model(self):
         model = keras.models.load_model(self.path)
         noise = np.random.random(self.n_imgs * self.latent_dim).reshape(self.n_imgs, self.latent_dim)
@@ -38,6 +48,8 @@ class Roads:
 
     # From n_imgs images, perform Preprocessing
     # and extract one road network image
+    # @param imgs The list of images
+    # @return road_network One generate road image
     def get_road_network(self, imgs):
         road_maps = list()
         image_index = 0
@@ -46,7 +58,7 @@ class Roads:
             # If there are no more valid road maps (above the pct)
             if image_index > self.n_imgs:
                 index_list = np.random.random_integers(self.n_imgs, size=self.n_maps - len(road_maps))
-                for i in index_list: road_maps.append(imgs[idw, :, :, 0])
+                for i in index_list: road_maps.append(imgs[i, :, :, 0])
                 break
 
             # Get the percentage of roads present
@@ -64,6 +76,10 @@ class Roads:
 
         return road_network
 
+    # This method processes the road image
+    # by applying Computer Vision methods to clean it
+    # @param region_size The size of the selected Minecraft region
+    # @return A processed road image
     def process_road_network(self, region_size):
         # Get the required size and convert to grayscale image
         size = np.mgrid[region_size.minx:region_size.maxx, region_size.minz:region_size.maxz][0].shape
@@ -85,190 +101,304 @@ class Roads:
         processed_road_network = np.array(Image.fromarray(road_network_closed).resize((min_size, min_size), Image.LANCZOS))
         return cv2.threshold(processed_road_network, int(np.mean(processed_road_network)), 255, cv2.THRESH_BINARY)[1]
 
+    # This method build the road if not in water
+    # @param level The level provided by MCEdit
+    # @param floor_points, usable_floor The whole floor map and the array containing the roads
+    # @param road The road generated image as an array
+    # @param box The bounding box provided by MCEdit
+    # @param blocks A list of block types
+    def build_road(self, level, floor_points, road, box, usable_floor, blocks):
+        for pos in sorted(floor_points):
+            x, y, z = floor_points[pos]
+
+            # Remove Lava
+            self.remove_lava(level, x, y, z, box)
+
+            if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [0, 8, 9]:
+                # Remove trees if on road
+                self.remove_tree(level, x, y, z)
+                # Build the road
+                uf.setBlock(level, blocks[0], x, y, z)
+                try:
+                    usable_floor[pos[0]][pos[1]] = 255
+                except: print("Error: Index is out of range for usable_floor!\nNo Roads will be connected!\nProbably the floor is invalid!")
+
+        # Assign floor array and map
+        self.usable_floor = usable_floor
+        self.floor = floor_points
+        self.blocks = blocks
+
+        # Get Components
+        components, usable_floor = self.get_components(level, usable_floor, floor_points)
+        floor = np.zeros(usable_floor.shape) if usable_floor is not None else None
+        # Check if there are separated components
+        if components is not None:
+            self.connect_components(level, components, floor, floor_points, np.array(usable_floor), blocks)
+
+    # This method tries to find a path between every disconnected road
+    # @param level The level provided by MCEdit
+    # @param components The map of disconnected roads
+    # @param free_floor The floor without any obstructions
+    # @param floor_points, usable_floor The whole floor map and the array containing the roads
+    # @param blocks A list of block types
+    def connect_components(self, level, components, free_floor, floor_points, usable_floor, blocks):
+        start_end_points = list(combinations(components.keys(), 2))
+        print("There are " + str(len(components)) + " disconnected roads!")
+        visited = set()
+        # For every disconnected road point
+        for points in start_end_points:
+            if points[0] in visited: continue
+            visited.add(points[0])
+            path = star.search(free_floor, 1, components[points[0]], components[points[1]])
+            ar_path = np.array(path)
+
+            if path is not None:  # Build connecting road
+                rows, cols = np.where(ar_path != -1)
+                for i in range(len(rows)-1): usable_floor[rows[i]][cols[i]] == 255  # Add the new path
+                self.connect_roads(rows, cols, level, floor_points, usable_floor, blocks)
+
+        # Update floor array
+        self.usable_floor = usable_floor
+
+    # This method uses the A* path to connect the disconnected roads
+    # @param rows, cols The rows and columns of the path array
+    # @param level The level provided by MCEdit
+    # @param floor_points, usable_floor The whole floor map and the array containing the roads
+    # @param blocks A list of block types
+    # @param package=None The package of lvl, start point and blocks for when connecting houses
+    def connect_roads(self, rows, cols, level, floor_points, usable_floor, blocks, package=None):
+        is_start, is_end = False, False
+        block, slab, _ = blocks
+        # Go through every path point
+        for i in range(len(rows)):
+            r, c = rows[i], cols[i]
+            x, y, z = floor_points[(r, c)]
+            # Check if connecting houses to roads
+            if package is not None:
+                lvl, start, floor_blocks = package
+                if [r, c] == start or i in [1, 2, 3]:
+                    if lvl == 0: y = y - 2
+                    elif lvl == 1: y = y - 1
+                    else: y = y
+                if level.blockAt(x, y, z) in floor_blocks or level.blockAt(x, y-1, z) in floor_blocks: continue
+
+            if level.blockAt(x, y, z) in [8, 9]:  # Build Bridge
+                uf.setBlock(level, block, x, y+1, z)
+                if not is_start: self.build_bridge_walls(level, block, x, y, z)
+                else: is_start = False
+                is_end = True
+            else:  # Build Road
+                if is_end:
+                    uf.setBlock(level, slab, x, y+1, z)
+                    is_end = False
+                uf.setBlock(level, block, x, y, z)
+                try:  # Put a step in fron of the bridge
+                    if usable_floor[r+1][c+1] != len(usable_floor)-1 and usable_floor[r+1][c+1] == 1:
+                        uf.setBlock(level, slab, x, y+1, z)
+                        is_start = True
+                except:
+                    print("Out of bounds for slab - maybe the floor is invalid!")
+
+    # This method builds the walls of any bridge
+    # @param level The level provided by MCEdit
+    # @param block The block type for the walls
+    # @param x, y, z The coordinates
+    def build_bridge_walls(self, level, block, x, y, z):
+        wall_points = [(x+1, y+1, z+1), (x-1, y+1, z-1), (x+1, y+1, z-1), (x-1, y+1, z+1), (x, y+1, z+1), (x, y+1, z-1), (x+1, y+1, z), (x-1, y+1, z)]
+        for p in wall_points:  # Build the block for each wall point
+            if level.blockAt(p[0], p[1], p[2]) not in [block[0], 8, 9] and level.blockAt(p[0], p[1]-1, p[2]) in [8, 9]:
+                uf.setBlock(level, block, p[0], y+2, p[2])
+        if level.blockAt(x, y+2, z) in [block[0]]: uf.setBlock(level, (0, 0), x, y+2, z)  # Remove wall if on path
+
+    def get_components(self, level, usable_floor, floor_points):
+        try:
+            ar_floor = np.array(usable_floor, dtype=np.uint8)
+        except:
+            print("Invalid floor has been selected!\nNo components will be found!")
+            return None, None
+
+        components, objects, stats, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
+
+        if components < 3: return None, None  # The background + 2 separated roads
+        comp = np.arange(1, components)  # All components except the background
+        components_map = {}
+        for x in range(0, ar_floor.shape[0]):
+            for y in range(0, ar_floor.shape[1]):
+                posx, posy, posz = floor_points[(x, y)]
+                if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1
+
+                if objects[x][y] in comp:  # Record the positions of each component
+                    components_map[objects[x][y]] = [x, y]
+                    comp = np.delete(comp, np.argwhere(comp == objects[x][y]))
+        return components_map, ar_floor
+
+    # This method removes any detected lava
+    def remove_lava(self, level, x, y, z, box):
+        block = level.blockAt(x, y, z)
+        c_x, c_y = 0, 0
+        # Get the closest non-obstacle block
+        while block in [8, 9, 10, 11]:
+            if x+c_x != box.maxx:
+                block = level.blockAt(x+c_x, y, z)
+                c_x += 1
+            else:
+                block = level.blockAt(x, y+c_y, z)
+                c_y += 1
+
+            if y+c_y == box.maxy: block = 0
+
+        # If there is lava
+        if level.blockAt(x, y, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y, z)
+        elif level.blockAt(x, y+1, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y+1, z)
+
+    def remove_tree(self, level, x, y, z):
+        points_x, points_y, points_z = [], [y], []
+        is_start = True
+        posy = y+1
+        y += 1
+        while True:
+            if level.blockAt(x, y, z) in [17, 81, 162] and is_start:  # Removes all trees
+                points_y.append(y)
+                points_x = self.get_x_bound(level, x, y, z, points_x)
+                points_z = self.get_z_bound(level, x, y, z, points_z)
+                if level.blockAt(x, y+1, z) in [18, 161]: is_start = False
+            elif level.blockAt(x, y, z) in [18, 161] and not is_start:
+                points_y.append(y)
+                points_x = self.get_x_bound(level, x, y, z, points_x)
+                points_z = self.get_z_bound(level, x, y, z, points_z)
+            else: break
+            y += 1
+        self.remove_tree_from_bound(level, points_x, points_y, points_z, [x, posy, z])
+
+    def remove_tree_from_bound(self, level, points_x, points_y, points_z, road):
+        if points_x and points_y and points_z:
+            minx, maxx = min(points_x), max(points_x)
+            miny, maxy = min(points_y), max(points_y)
+            minz, maxz = min(points_z), max(points_z)
+
+            first_tree = False
+            last_tree = []
+            trees = {}
+            leaf = None
+            # Remove Trees on Path
+            for x in range(minx-2, maxx+2):
+                for z in range(minz-2, maxz+2):
+                    for y in range(miny-1, 350):
+                        if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]:
+                            if level.blockAt(x, y, z) in [17, 81, 162] and not first_tree and [x, y, z] != road: trees[(x, z)] = y
+                            if level.blockAt(x, y, z) in [17, 81, 162] and not first_tree and [x, y, z] == road:
+                                first_tree = True
+                                uf.setBlock(level, (0, 0), x, y, z)
+                                last_tree.append((x, z))
+                            elif level.blockAt(x, y, z) in [17, 81, 162] and first_tree:
+                                if (x, z) in last_tree: uf.setBlock(level, (0, 0), x, y, z)
+                                else: break
+                            elif level.blockAt(x, y, z) in [18, 161]:
+                                leaf = level.blockAt(x, y, z)
+                                uf.setBlock(level, (0, 0), x, y, z)
+                                first_tree = False
+
+            # Grow back leaves on cut trees not on road
+            for tree in trees.iterkeys():
+                y = trees[tree]
+                points = [(tree[0]+1, tree[1]+1), (tree[0]-1, tree[1]-1), (tree[0]+1, tree[1]-1),
+                          (tree[0]-1, tree[1]+1), (tree[0], tree[1]+1), (tree[0]+1, tree[1]),
+                          (tree[0]-1, tree[1]), (tree[0], tree[1]-1)]
+                leaf = leaf if leaf is not None else 18  # Set default leaf
+                for p in points: uf.setBlock(level, (leaf, 0), p[0], y, p[1])
+                uf.setBlock(level, (leaf, 0), tree[0], y+1, tree[1])
+
+    def get_x_bound(self, level, x, y, z, points_x):
+        posx = x+1
+        reverse = False
+        while True:
+            if reverse is False:
+                if level.blockAt(posx, y, z) in [18, 161]:
+                    points_x.append(posx)
+                    posx += 1
+                else:
+                    posx = x-1
+                    reverse = True
+            else:
+                if level.blockAt(posx, y, z) in [18, 161]:
+                    points_x.append(posx)
+                    posx -= 1
+                else: break
+        # print("X: ", points_x)
+        return points_x
+
+    def get_z_bound(self, level, x, y, z, points_z):
+        posz = z+1
+        reverse = False
+        while True:
+            if reverse is False:
+                if level.blockAt(x, y, posz) in [18, 161]:  # Removes all trees TODO: Move it so you remove only if on path way
+                    points_z.append(posz)
+                    posz += 1
+                else:
+                    posz = z-1
+                    reverse = True
+            else:
+                if level.blockAt(x, y, posz) in [18, 161]:  # Removes all trees TODO: Move it so you remove only if on path way
+                    points_z.append(posz)
+                    posz -= 1
+                else: break
+        return points_z
 
 """
 This is the main function that 
 gets called after executing the filter in MCEdit
 """
-def perform(level, box, options):
-    road_network = Roads().process_road_network(box)  # Get the road as a Numpy array Image
-    biom, road_blocks, log_types = get_biom(level, box)  # Get the biom and types of blocks
+def perform(level, box, options, block=None, need_return=False):
+    road = Roads()
+    road_network = road.process_road_network(box)  # Get the road as a Numpy array Image
+    biom, road_blocks = get_biom(level, box)  # Get the biom and types of blocks
     floor, usable_floor = get_floor(level, box)  # Get the usable floor box region
-    build_road(level, floor, road_network, box, usable_floor) # Build and connect roads
+    if block is not None: road_blocks[0] = block # Select Block types
+    road.build_road(level, floor, road_network, box, usable_floor, road_blocks)  # Build and connect roads
+    if need_return: return road
 
 
-def build_road(level, floor_points, road, box, usable_floor):
-    # road_size = np.array(np.where(road == 255)).shape[-1]
+def connect_houses_to_roads(level, door_loc, road, blocks):
+    if road.floor is None or road.usable_floor is None or road.blocks is None:
+        print("Road Floor is None!")
+        return
+    floor = dict((v,k) for k, v in road.floor.iteritems())
+    usable_floor = np.array(road.usable_floor)
+    if len(usable_floor.shape) != 2: return
+    x, z, y = door_loc
 
-    for pos in sorted(floor_points):
-        x, y, z = floor_points[pos]
+    if floor.get((x, y-2, z)) is not None:  # Beginning of door
+        start = floor.get((x, y-2, z))
+        lvl = abs((x, y, z)[1]) - abs((x, y-2, z)[1])  # 2
+    elif floor.get((x, y-1, z)) is not None:  # Middle of door
+        start = floor.get((x, y-1, z))
+        lvl = abs((x, y, z)[1]) - abs((x, y-1, z)[1])  # 1
+    elif floor.get((x, y, z)) is not None:  # Top of door
+        start = floor.get((x, y, z))
+        lvl = 0
+    else: print("Path cannot be found!"); return
+    start = [start[0], start[1]]
 
-        # Remove Lava
-        remove_lava(level, x, y, z, box)
-        # TODO: check the elevation level and find obstacles
-
-        if pos in tuple(zip(*np.where(road == 255))) and level.blockAt(x, y, z) not in [0, 8, 9]:
-            # Remove trees if on road
-            remove_tree(level, x, y, z)
-            # TODO: Build the road here
-            uf.setBlock(level, (98,0), x, y, z)
-            usable_floor[pos[0]][pos[1]] = 255
-
-    # Get Components
-    components, usable_floor = get_components(level, usable_floor, floor_points)
-    floor = np.zeros(usable_floor.shape) if usable_floor is not None else None
-    # Check if there are separated components
-    if components is not None:
-        connect_components(level, components, floor, floor_points, np.array(usable_floor))
-
-def connect_components(level, components, floor, floor_points, usable_floor):
-    start_end_points = list(combinations(components.keys(), 2))
-    print("There are " + str(len(components)) + " disconnected roads!")
-    visited = set()
-    for points in start_end_points:
-        if points[0] in visited: continue
-        visited.add(points[0])
-        path = star.search(floor, 1, components[points[0]], components[points[1]])
-        ar_path = np.array(path)
-
-        if path is not None:
-            rows, cols = np.where(ar_path != -1)
-            for i in range(len(rows)-1): usable_floor[rows[i]][cols[i]] == 2
-            connect_roads(rows, cols, level, floor_points, usable_floor)
-
-def connect_roads(rows, cols, level, floor_points, usable_floor):
-    block = (98, 0)
-    is_start, is_end = False, False
-    start, end = [rows[0], cols[0]], [rows[-1], cols[-1]]
-    for i in range(len(rows)-1):
-        r, c = rows[i], cols[i]
-        x, y, z = floor_points[(r, c)]
-        # TODO: Build road or bridge
-        # TODO: remove unnecessary path
-        if level.blockAt(x, y, z) in [8, 9]:  # If path is on water block
-            uf.setBlock(level, block, x, y+1, z)
-            if not is_start: build_bridge(level, block, x, y, z)
-            else: is_start = False
-            is_end = True
-        else:
-            # TODO: adds planks even not on proper places
-            if is_end:
-                uf.setBlock(level, (44, 0), x, y+1, z)
-                is_end = False
-            uf.setBlock(level, block, x, y, z)  # TODO: Change to actual path 98
-            if usable_floor[r+1][c+1] != len(usable_floor) and usable_floor[r+1][c+1] == 1:
-                uf.setBlock(level, (44, 0), x, y+1, z)  # Put step at the start
-                is_start = True
-
-def build_bridge(level, block, x, y, z):
-    # Build walls
-    wall_points = [(x+1, y+1, z+1), (x-1, y+1, z-1), (x+1, y+1, z-1), (x-1, y+1, z+1), (x, y+1, z+1), (x, y+1, z-1), (x+1, y+1, z), (x-1, y+1, z)]
-    for p in wall_points:
-        if level.blockAt(p[0], p[1], p[2]) not in [block[0], 8, 9] and level.blockAt(p[0], p[1]-1, p[2]) in [8, 9]: uf.setBlock(level, block, p[0], y+2, p[2])
-    if level.blockAt(x, y+2, z) in [block[0]]: uf.setBlock(level, (0, 0), x, y+2, z)
-
-def get_components(level, usable_floor, floor_points):
-    try:
-        ar_floor = np.array(usable_floor, dtype=np.uint8 )
-    except:
-        print("Invalid floor has been selected!\nNo components will be found!")
-        raise
-        return None, None
-
-    components, objects, stats, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
-
-    if components < 3: return None, None # The background + 2 separated roads
-    comp = np.arange(1, components) # all components except the background
-    components_map = {}
-    for x in range(0, ar_floor.shape[0]):
-        for y in range(0, ar_floor.shape[1]):
-            posx, posy, posz = floor_points[(x, y)]
-            if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1
-
-            if objects[x][y] in comp:  # Record the positions of each component
-                components_map[objects[x][y]] = [x, y]
-                comp = np.delete(comp, np.argwhere(comp == objects[x][y]))
-    return components_map, ar_floor
-
-# This method removes any detected lava
-def remove_lava(level, x, y, z, box):
-    block = level.blockAt(x, y, z)
-    c_x, c_y = 0, 0
-    # Get the closest non-obstacle block
-    while block in [8, 9, 10, 11]:
-        if x+c_x != box.maxx:
-            block = level.blockAt(x+c_x, y, z)
-            c_x += 1
-        else:
-            block = level.blockAt(x, y+c_y, z)
-            c_y += 1
-
-        if y+c_y == box.maxy: block = 0
-
-    # If there is lava
-    if level.blockAt(x, y, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y, z)
-    elif level.blockAt(x, y+1, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y+1, z)
-
-def remove_tree(level, x, y, z):
-    points_x, points_y, points_z = [], [y], []
-    y += 1
-
-    while True:
-        if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: # Removes all trees
-            points_y.append(y)
-            points_x = get_x_bound(level, x, y, z, points_x)
-            points_z = get_z_bound(level, x, y, z, points_z)
-            y += 1
+    # Get end point (First run, get closest)
+    end, run = None, 1
+    ending = [usable_floor.shape[0], usable_floor.shape[1]]
+    beginning = [start[0], start[1]] if start[1] < ending[1] else [0, 0]
+    while run < 3:
+        for r in range(beginning[0], ending[0]):
+            for c in range(beginning[1], ending[1]):
+                if usable_floor[r][c] == 255: end = [r, c]
+        if end is None: beginning = [0, 0]; run += 1
         else: break
-    remove_tree_from_bound(level, points_x, points_y, points_z)
+    if end is None: return
 
-def remove_tree_from_bound(level, points_x, points_y, points_z):
-    if points_x and points_y and points_z:
-        minx, maxx = min(points_x), max(points_x)
-        miny, maxy = min(points_y), max(points_y)
-        minz, maxz = min(points_z), max(points_z)
+    # Get the A* path
+    path = star.search(np.zeros(usable_floor.shape), 1, start, end)
+    if path is None: return
 
-        for x in range(minx-1, maxx+1):
-            for z in range(minz-1, maxz+1):
-                for y in range(miny-1, maxy+1):
-                    if level.blockAt(x, y, z) in [17, 18, 81, 161, 162]: uf.setBlock(level, (0, 0), x, y, z)
-
-def get_x_bound(level, x, y, z, points_x):
-    posx =  x + 1
-    reverse = False
-    while True:
-        if reverse is False:
-            if level.blockAt(posx, y, z) in [17, 18, 81, 161, 162]:
-                points_x.append(posx)
-                posx += 1
-            else:
-                posx = x-1
-                reverse = True
-        else:
-            if level.blockAt(posx, y, z) in [17, 18, 81, 161, 162]:
-                points_x.append(posx)
-                posx -= 1
-            else: break
-    # print("X: ", points_x)
-    return points_x
-
-def get_z_bound(level, x, y, z, points_z):
-    posz = z + 1
-    reverse = False
-    while True:
-        if reverse is False:
-            if level.blockAt(x, y, posz) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
-                points_z.append(posz)
-                posz += 1
-            else:
-                posz = z-1
-                reverse = True
-        else:
-            if level.blockAt(x, y, posz) in [17, 18, 81, 161, 162]: # Removes all trees TODO: Move it so you remove only if on path way
-                points_z.append(posz)
-                posz -= 1
-            else: break
-    return points_z
+    rows, cols = np.where(np.array(path) != -1)
+    package = [lvl, start, [block[0] for block in blocks]]
+    road.connect_roads(rows, cols, level, road.floor, usable_floor, [(41, 0), (44, 5), (0,0)], package)  # [(41, 0), (44, 5), (0,0)] for testing
 
 def get_floor(level, box):
     mapped_points = {}
@@ -293,8 +423,14 @@ def get_floor(level, box):
 
     return mapped_points, usable_floor
 
+# This method  gets the biom and
+# selects road block types given that information.
+# It is based on probabilities
+# @param level The level provided by MCEdit
+# @param box The region selected in Minecraft
+# @return road_biom, road_blocks The biom and road block types selected on majority voting
 def get_biom(level, box):
-    log_types, road_choices = [], []
+    road_choices = []
     # Choice per slice
     for (chunk, slices, point) in level.getChunkSlices(box):
         bins = np.bincount(chunk.root_tag["Level"]["Biomes"].value)
@@ -302,36 +438,16 @@ def get_biom(level, box):
         bioms = np.flatnonzero(count)
         probs = {i:count[i] for i in bioms}
         road_choices.append(np.random.choice(probs.keys(), p=probs.values()))
-        # log_types = get_log_types(chunk, log_types)
 
     road_biom = max(road_choices, key=road_choices.count)
     road_blocks = get_road_blocks(road_biom)
-    return road_biom, road_blocks, log_types
+    return road_biom, road_blocks
 
-# TODO: link/cite
+# All Minecraft blocks can be found here - https://minecraft-ids.grahamedgecombe.com/
+# All Minecraft biomes can be found here - https://minecraft.fandom.com/wiki/Biome/ID
 # From official Minecraft Wiki (Biomes and Blocks ID)
+# This method is to be used if the filter is used alone
 def get_road_blocks(road_biom):
     # Block, Slab, Stairs
-    if road_biom in [2, 7, 16, 17, 27, 28, 36, 37, 38, 39, 130, 165, 166, 167]: return [43, 44, 109]
-    else: return [1, 44, 67]
-
-# # TODO: link/cite
-# # Method from the GDMC Competition
-# # Checks the biom of each chunk and adds a block type
-# def get_log_types(chunk, log_types):
-#     for val in chunk.root_tag["Level"]["Biomes"].value:
-#         if val in [1,3,4,6,8,132]: #oak
-#             log_types.append("oak")
-#         if val in [21,22,23,149,151]: #jungle
-#             log_types.append("jungle")
-#         if val in [5,12,13,19,30,31,32,33,158,160,161,133]: #spuce
-#             log_types.append("spruce")
-#         if val in [6,29,157,134]: #dark
-#             log_types.append("dark")
-#         if val in [2,17,27,28,155,156]: #birch
-#             log_types.append("birch")
-#         if val in [35,36,37,38,39,163,164,165,166,167]: #acacia
-#             log_types.append("acacia")
-#
-#     if not log_types: return ["oak"]
-#     return log_types
+    if road_biom in [2, 7, 16, 17, 27, 28, 36, 37, 38, 39, 130, 165, 166, 167]: return [(43, 0), (44, 0), (109,0)]
+    else: return [(1, 0), (44, 5), (67, 0)]
