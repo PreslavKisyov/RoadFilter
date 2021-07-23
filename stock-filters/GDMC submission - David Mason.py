@@ -227,7 +227,7 @@ def get_next_layer_edge(current, next_layer, path):
 def get_bottom(level, box, min_y):
     #bottom_matrix = empty([box.maxx-box.minx, box.maxz-box.minz])
     bottom = {}
-    print(box.minx, box.maxx,box.minz, box.maxz)
+
     for x in range(box.minx, box.maxx):
         for z in range(box.minz, box.maxz):
             for y in range(350, box.miny, -1):
@@ -1668,8 +1668,7 @@ def get_door(house):
                             
     door_trim = (0,0)
     door_trim_pos = (0,0,0)
-    
-    
+
     return door_pos, door_blocks, door_trim, door_trim_pos, door_air
             
         
@@ -2256,23 +2255,22 @@ def perform(level, box, options):
     # for seed in district_seeds:
     #
     #     for point in seed.edge_points:
-    #         print "Point: "+str(point)
-    #         print "Seed: "+str(seed)
     #
     #         for x in range(-1,2):
     #             for z in range(-1,2):
-    #                     #uf.setBlockToGround(level, (0,0), point[0], point[1], point[2]+2, point[2])
-    #                     for k in range(2):
-    #                         uf.setBlock(level,(0,0), point[0]+x, point[2]+k+1, point[1]+z)
-    #                 #if randint(0,2*(abs(x)+abs(z))) == 0:
-    #                     block = choice([(98,0),(98,0),(98,0),(98,0),(1,5),(4,0),(13,0),(98,1),(98,2)])
-    #
-    #                     if level.blockAt(point[0]+x, point[2], point[1]+z) == 9:
-    #                         uf.setBlockIfEmpty(level,(44,5), point[0]+x, point[2]+1, point[1]+z)
-    #                     else:
-    #                         uf.setBlock(level,block, point[0]+x, point[2], point[1]+z)
-    rf.perform(level, box, options)
+                        #uf.setBlockToGround(level, (0,0), point[0], point[1], point[2]+2, point[2])
+                        # for k in range(2):
+                        #     uf.setBlock(level,(0,0), point[0]+x, point[2]+k+1, point[1]+z)
+                    #if randint(0,2*(abs(x)+abs(z))) == 0:
+                        # block = choice([(98,0),(98,0),(98,0),(98,0),(1,5),(4,0),(13,0),(98,1),(98,2)])
 
+                        # if level.blockAt(point[0]+x, point[2], point[1]+z) == 9:
+                        #     # uf.setBlockIfEmpty(level,(44,5), point[0]+x, point[2]+1, point[1]+z)
+                        #     continue
+                        # else:
+                        #     uf.setBlock(level,block, point[0]+x, point[2], point[1]+z)
+    block = choice([(98,0),(98,0),(98,0),(98,0),(1,5),(4,0),(13,0),(98,1),(98,2)])
+    road = rf.perform(level, box, options, block, True)
 
     
  ##############################################################
@@ -2472,7 +2470,7 @@ def perform(level, box, options):
     for seed in district_seeds:
         if seed.mine == False:
             place_houses_in_seed(seed, bottom,box,map_points_2d,log_types,stair_types,slab_types,plank_types)
-        
+
     get_house_grounds(district_seeds)
 
 
@@ -2635,8 +2633,8 @@ def perform(level, box, options):
             for point in house.roof:
                 #print(block)
                 uf.setBlock(level,house.roof[point], point[0], point[2], point[1])
-            
 
+            rf.connect_houses_to_roads(level, house.door_pos, road, [(1,6),(4,0),(43,0),(43,5)])
 
     for seed in district_seeds:
        # uf.setBlock(level,(22,0), seed.x, 30, seed.z)
@@ -2677,9 +2675,7 @@ def perform(level, box, options):
                     uf.setBlockIfEmpty(level,(96,12), point[0]+x_off, point[2]+4, point[1]-1+z_off)
     
 
-            
-    print()
-                
+
     
 
 
