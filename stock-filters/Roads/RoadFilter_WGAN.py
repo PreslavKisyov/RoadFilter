@@ -10,6 +10,8 @@ from itertools import combinations
     This class creates and processes the Road Network Image.
     A WGAN Generates a road image and then it is adapted
     to the selected terrain using Computer Vision techniques.
+    The road is then placed in Minecraft and further processed
+    to resemble a real-like road system.
     
     @author: Preslav Kisyov
 """
@@ -98,7 +100,7 @@ class Roads:
         road_network_closed[objects != max_component] = 0
 
         # Resize to the required size using Interpolation and convert to Binary
-        processed_road_network = np.array(Image.fromarray(road_network_closed).resize((min_size, min_size), Image.LANCZOS))
+        processed_road_network = np.array(Image.fromarray(road_network_closed).resize((min_size, max_size), Image.LANCZOS))
         return cv2.threshold(processed_road_network, int(np.mean(processed_road_network)), 255, cv2.THRESH_BINARY)[1]
 
     # This method build the road if not in water
@@ -176,24 +178,24 @@ class Roads:
             # Check if connecting houses to roads
             if package is not None:
                 lvl, start, floor_blocks = package
-                if [r, c] == start or i in [1, 2, 3]:
+                if [r, c] == start or i in [1, 2, 3]:  # If the first several blocks
                     if lvl == 0: y = y - 2
                     elif lvl == 1: y = y - 1
                     else: y = y
                 if level.blockAt(x, y, z) in floor_blocks or level.blockAt(x, y-1, z) in floor_blocks: continue
 
-            if level.blockAt(x, y, z) in [8, 9]:  # Build Bridge
+            if level.blockAt(x, y, z) in [0, 8, 9]:  # Build Bridge
                 uf.setBlock(level, block, x, y+1, z)
                 if not is_start: self.build_bridge_walls(level, block, x, y, z)
                 else: is_start = False
                 is_end = True
             else:  # Build Road
                 if is_end:
-                    uf.setBlock(level, slab, x, y+1, z)
+                    uf.setBlock(level, block, x, y+1, z)
                     is_end = False
                 uf.setBlock(level, block, x, y, z)
-                try:  # Put a step in fron of the bridge
-                    if usable_floor[r+1][c+1] != len(usable_floor)-1 and usable_floor[r+1][c+1] == 1:
+                try:  # Put a step in front of the bridge
+                    if usable_floor[r+1][c+1] != len(usable_floor)-1 and (usable_floor[r+1][c+1] == 1 or usable_floor[r+1][c+1] == 0):
                         uf.setBlock(level, slab, x, y+1, z)
                         is_start = True
                 except:
@@ -206,26 +208,29 @@ class Roads:
     def build_bridge_walls(self, level, block, x, y, z):
         wall_points = [(x+1, y+1, z+1), (x-1, y+1, z-1), (x+1, y+1, z-1), (x-1, y+1, z+1), (x, y+1, z+1), (x, y+1, z-1), (x+1, y+1, z), (x-1, y+1, z)]
         for p in wall_points:  # Build the block for each wall point
-            if level.blockAt(p[0], p[1], p[2]) not in [block[0], 8, 9] and level.blockAt(p[0], p[1]-1, p[2]) in [8, 9]:
+            if level.blockAt(p[0], p[1], p[2]) not in [block[0], 8, 9] and level.blockAt(p[0], p[1]-1, p[2]) in [0, 8, 9]:
                 uf.setBlock(level, block, p[0], y+2, p[2])
         if level.blockAt(x, y+2, z) in [block[0]]: uf.setBlock(level, (0, 0), x, y+2, z)  # Remove wall if on path
 
+    # This method gets if there are any disconnected roads
+    # @param level The level provided by MCEdit
+    # @param floor_points, usable_floor The whole floor map and the array containing the roads
     def get_components(self, level, usable_floor, floor_points):
-        try:
+        try:  # Check if the selected bottom has no air gaps
             ar_floor = np.array(usable_floor, dtype=np.uint8)
         except:
             print("Invalid floor has been selected!\nNo components will be found!")
             return None, None
+        # Get any disconnected components from the road map array/image
+        components, objects, _, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
 
-        components, objects, stats, _ = cv2.connectedComponentsWithStats(ar_floor, connectivity=8)
-
-        if components < 3: return None, None  # The background + 2 separated roads
+        if components < 3: return None, None  # The background + 2 separated roads = 3 components
         comp = np.arange(1, components)  # All components except the background
         components_map = {}
         for x in range(0, ar_floor.shape[0]):
             for y in range(0, ar_floor.shape[1]):
                 posx, posy, posz = floor_points[(x, y)]
-                if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1
+                if level.blockAt(posx, posy, posz) in [8, 9]: ar_floor[x][y] = 1  # put water in path array
 
                 if objects[x][y] in comp:  # Record the positions of each component
                     components_map[objects[x][y]] = [x, y]
@@ -233,6 +238,9 @@ class Roads:
         return components_map, ar_floor
 
     # This method removes any detected lava
+    # @param level The level provided by MCEdit
+    # @param box The selected Minecraft region
+    # @param x, y, z The coordinates of the block
     def remove_lava(self, level, x, y, z, box):
         block = level.blockAt(x, y, z)
         c_x, c_y = 0, 0
@@ -251,18 +259,21 @@ class Roads:
         if level.blockAt(x, y, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y, z)
         elif level.blockAt(x, y+1, z) in [10, 11]: uf.setBlock(level, (block, 0), x, y+1, z)
 
+    # This method sets the bounding box of each tree on path
+    # @param level The level provided by MCEdit
+    # @param x, y, z The coordinates of the road
     def remove_tree(self, level, x, y, z):
         points_x, points_y, points_z = [], [y], []
         is_start = True
         posy = y+1
         y += 1
-        while True:
-            if level.blockAt(x, y, z) in [17, 81, 162] and is_start:  # Removes all trees
+        while True:  # For each y (height) level, get the bounding box if a tree
+            if level.blockAt(x, y, z) in [17, 81, 162] and is_start:  # Remove tree iff the tree base is on the road
                 points_y.append(y)
                 points_x = self.get_x_bound(level, x, y, z, points_x)
                 points_z = self.get_z_bound(level, x, y, z, points_z)
                 if level.blockAt(x, y+1, z) in [18, 161]: is_start = False
-            elif level.blockAt(x, y, z) in [18, 161] and not is_start:
+            elif level.blockAt(x, y, z) in [18, 161] and not is_start:  # Remove the leaves of the tree
                 points_y.append(y)
                 points_x = self.get_x_bound(level, x, y, z, points_x)
                 points_z = self.get_z_bound(level, x, y, z, points_z)
@@ -270,17 +281,21 @@ class Roads:
             y += 1
         self.remove_tree_from_bound(level, points_x, points_y, points_z, [x, posy, z])
 
+    # This method goes through every point in the found
+    # x, z, y boundary box and removes any trees found
+    # @param level The level given from MCEdit
+    # @param points_x, points_y, points_z The list of x, y, z points
+    # @param road The coordinates of the current road
     def remove_tree_from_bound(self, level, points_x, points_y, points_z, road):
         if points_x and points_y and points_z:
+            # Get the min and max of each direction of the box
             minx, maxx = min(points_x), max(points_x)
             miny, maxy = min(points_y), max(points_y)
             minz, maxz = min(points_z), max(points_z)
 
-            first_tree = False
-            last_tree = []
-            trees = {}
-            leaf = None
-            # Remove Trees on Path
+            first_tree, leaf = False, None
+            last_tree, trees = [], {}
+            # Remove Trees on Path using the found x, z, y boundary box
             for x in range(minx-2, maxx+2):
                 for z in range(minz-2, maxz+2):
                     for y in range(miny-1, 350):
@@ -298,7 +313,7 @@ class Roads:
                                 uf.setBlock(level, (0, 0), x, y, z)
                                 first_tree = False
 
-            # Grow back leaves on cut trees not on road
+            # Grow back leaves on cut trees that are not on road
             for tree in trees.iterkeys():
                 y = trees[tree]
                 points = [(tree[0]+1, tree[1]+1), (tree[0]-1, tree[1]-1), (tree[0]+1, tree[1]-1),
@@ -308,37 +323,44 @@ class Roads:
                 for p in points: uf.setBlock(level, (leaf, 0), p[0], y, p[1])
                 uf.setBlock(level, (leaf, 0), tree[0], y+1, tree[1])
 
+    # Get the leaves of the tree for the X axis
+    # @param level The level provided by MCEdit
+    # @param x, y, z The coordinates to search from
+    # @param points_x The list of found points on the X axis
     def get_x_bound(self, level, x, y, z, points_x):
         posx = x+1
         reverse = False
         while True:
-            if reverse is False:
+            if reverse is False:  # Search one direction
                 if level.blockAt(posx, y, z) in [18, 161]:
                     points_x.append(posx)
                     posx += 1
                 else:
                     posx = x-1
                     reverse = True
-            else:
+            else:  # Search the other direction
                 if level.blockAt(posx, y, z) in [18, 161]:
                     points_x.append(posx)
                     posx -= 1
                 else: break
-        # print("X: ", points_x)
         return points_x
 
+    # Get the leaves of the tree for the Z axis
+    # @param level The level provided by MCEdit
+    # @param x, y, z The coordinates to search from
+    # @param points_z The list of found points on the Z axis
     def get_z_bound(self, level, x, y, z, points_z):
         posz = z+1
         reverse = False
         while True:
-            if reverse is False:
+            if reverse is False:  # Search one direction
                 if level.blockAt(x, y, posz) in [18, 161]:  # Removes all trees TODO: Move it so you remove only if on path way
                     points_z.append(posz)
                     posz += 1
                 else:
                     posz = z-1
                     reverse = True
-            else:
+            else:  # Search the other direction
                 if level.blockAt(x, y, posz) in [18, 161]:  # Removes all trees TODO: Move it so you remove only if on path way
                     points_z.append(posz)
                     posz -= 1
@@ -358,16 +380,24 @@ def perform(level, box, options, block=None, need_return=False):
     road.build_road(level, floor, road_network, box, usable_floor, road_blocks)  # Build and connect roads
     if need_return: return road
 
-
+# This method connects a House (from the door position)
+# To the closest road, by extending the road system.
+# It should be called from another filter, and roads should
+# already be present.
+# @param level The level provided by MCEdit
+# @param door_loc The location point of the door
+# @param road The road class
+# @param blocks A list of block types
 def connect_houses_to_roads(level, door_loc, road, blocks):
     if road.floor is None or road.usable_floor is None or road.blocks is None:
         print("Road Floor is None!")
         return
-    floor = dict((v,k) for k, v in road.floor.iteritems())
+    floor = dict((value, key) for key, value in road.floor.iteritems())  # Revert the point map
     usable_floor = np.array(road.usable_floor)
     if len(usable_floor.shape) != 2: return
     x, z, y = door_loc
 
+    # Get the point in space of the door (Depending on the door position)
     if floor.get((x, y-2, z)) is not None:  # Beginning of door
         start = floor.get((x, y-2, z))
         lvl = abs((x, y, z)[1]) - abs((x, y-2, z)[1])  # 2
@@ -380,7 +410,7 @@ def connect_houses_to_roads(level, door_loc, road, blocks):
     else: print("Path cannot be found!"); return
     start = [start[0], start[1]]
 
-    # Get end point (First run, get closest)
+    # Get end point (First run => get closest)
     end, run = None, 1
     ending = [usable_floor.shape[0], usable_floor.shape[1]]
     beginning = [start[0], start[1]] if start[1] < ending[1] else [0, 0]
@@ -396,18 +426,21 @@ def connect_houses_to_roads(level, door_loc, road, blocks):
     path = star.search(np.zeros(usable_floor.shape), 1, start, end)
     if path is None: return
 
-    rows, cols = np.where(np.array(path) != -1)
+    rows, cols = np.where(np.array(path) != -1)  # Get the actual path positions
     package = [lvl, start, [block[0] for block in blocks]]
-    road.connect_roads(rows, cols, level, road.floor, usable_floor, [(41, 0), (44, 5), (0,0)], package)  # [(41, 0), (44, 5), (0,0)] for testing
+    road.connect_roads(rows, cols, level, road.floor, usable_floor, road.blocks, package)
 
+# Get the floor points array and the floor map of coordinates
+# @param level The level provided by MCEdit
+# @param box The region selected in Minecraft
 def get_floor(level, box):
     mapped_points = {}
     usable_floor = []
     pos_x, pos_y = 0, 0
-    for x in range(box.minx, box.maxx): # depth
+    for x in range(box.minx, box.maxx):  # depth
         col = []
-        for z in range(box.minz, box.maxz): # width
-            for y in range(box.maxy, box.miny-1, -1): # height (col) but count the selected level # in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80]
+        for z in range(box.minz, box.maxz):  # width
+            for y in range(box.maxy, box.miny-1, -1):  # height (col) but count the selected level
                 if level.blockAt(x, y, z) in [1, 2, 3, 8, 9, 10, 11, 12, 13, 78, 80] and (pos_x, pos_y) not in mapped_points.keys():
                     mapped_points[(pos_x, pos_y)] = (x, y, z)
                     col.append(0)
@@ -449,5 +482,5 @@ def get_biom(level, box):
 # This method is to be used if the filter is used alone
 def get_road_blocks(road_biom):
     # Block, Slab, Stairs
-    if road_biom in [2, 7, 16, 17, 27, 28, 36, 37, 38, 39, 130, 165, 166, 167]: return [(43, 0), (44, 0), (109,0)]
+    if road_biom in [2, 7, 16, 17, 27, 28, 36, 37, 38, 39, 130, 165, 166, 167]: return [(43, 0), (44, 0), (109, 0)]
     else: return [(1, 0), (44, 5), (67, 0)]
