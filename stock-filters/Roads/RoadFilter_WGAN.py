@@ -121,6 +121,8 @@ class Roads:
                 self.remove_tree(level, x, y, z)
                 # Build the road
                 uf.setBlock(level, blocks[0], x, y, z)
+                # Build tunnel
+                self.build_tunnel(level, x, y, z, blocks[0])
                 try:
                     usable_floor[pos[0]][pos[1]] = 255
                 except: print("Error: Index is out of range for usable_floor!\nNo Roads will be connected!\nProbably the floor is invalid!")
@@ -136,6 +138,22 @@ class Roads:
         # Check if there are separated components
         if components is not None:
             self.connect_components(level, components, floor, floor_points, np.array(usable_floor), blocks)
+
+    # This method builds a tunnel if there are block above the path
+    # @param level The level provided by MCEdit
+    # @param x, y, z The coordinates of the path
+    # @param block The type of block
+    def build_tunnel(self, level, x, y, z, block):
+        for i in range(1, 3): # Make the tunnel 2 blocks high
+            if level.blockAt(x, y+i, z) in [1, 2, 3, 12, 13, 78, 80]:
+                uf.setBlock(level, (0, 0), x, y+i, z)
+                block_points = [(x+1, z), (x+1, z+1), (x+1, z-1), (x-1, z),
+                                (x-1, z+1), (x-1, z-1), (x, z+1), (x, z-1)]
+                is_tunnel_roof = False
+                for p in block_points:
+                    if level.blockAt(p[0], y+3, p[1]) != 0: is_tunnel_roof = True; break
+                # Build tunnel ceiling if necessary
+                if is_tunnel_roof and level.blockAt(x, y+3, z) in [0, 17, 81, 162, 18, 161]: uf.setBlock(level, block, x, y+3, z)
 
     # This method tries to find a path between every disconnected road
     # @param level The level provided by MCEdit
@@ -191,11 +209,11 @@ class Roads:
                 is_end = True
             else:  # Build Road
                 if is_end:
-                    uf.setBlock(level, block, x, y+1, z)
+                    uf.setBlock(level, slab, x, y+1, z)
                     is_end = False
                 uf.setBlock(level, block, x, y, z)
                 try:  # Put a step in front of the bridge
-                    if usable_floor[r+1][c+1] != len(usable_floor)-1 and (usable_floor[r+1][c+1] == 1 or usable_floor[r+1][c+1] == 0):
+                    if usable_floor[r+1][c+1] != len(usable_floor)-1 and usable_floor[r+1][c+1] == 1:
                         uf.setBlock(level, slab, x, y+1, z)
                         is_start = True
                 except:

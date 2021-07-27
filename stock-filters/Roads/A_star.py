@@ -1,5 +1,13 @@
 import numpy as np
 
+"""
+    This entire code base has been developed
+    by Baijayanta Roy at Medium-Article. The code
+    can be found at {https://github.com/BaijayantaRoy/Medium-Article}.
+    I do NOT claim any rights for this code as it has NOT been developed by me.
+    However, the code is under the GNU GENERAL PUBLIC LICENSE, thus, it is free to
+    copy and distribute.
+"""
 class Node:
     """
         A node class for A* Pathfinding
