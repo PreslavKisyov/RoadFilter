@@ -1,0 +1,13 @@
+numpy==1.14.5
+keras==2.2.0
+scipy
+scikit-learn
+PyOpenGL
+pygame==1.9.4
+pyyaml
+pillow
+ftputil==3.4
+pypiwin32
+matplotlib
+opencv-contrib-python
+Augmentor
